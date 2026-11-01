@@ -1,9 +1,12 @@
-name: Build Android APK
+name: Build Android APK from ZIP
 
 on:
   workflow_dispatch:
   push:
     branches: [main, master]
+    paths:
+      - '*.zip'
+      - '.github/workflows/android-apk.yml'
 
 permissions:
   contents: read
@@ -12,26 +15,36 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Locate project folder
+      - name: Find and extract source ZIP
         shell: bash
         run: |
-          PACKAGE_FILE=$(find . -type f -name package.json \
-            -not -path '*/node_modules/*' \
-            -not -path '*/.git/*' -print -quit)
+          set -euo pipefail
+          SOURCE_ZIP=""
+          for candidate in simulator-main.zip source.zip; do
+            if [ -f "$candidate" ]; then SOURCE_ZIP="$candidate"; break; fi
+          done
+          if [ -z "$SOURCE_ZIP" ]; then
+            SOURCE_ZIP=$(find . -maxdepth 1 -type f -iname '*.zip' ! -name 'android-apk.zip' -print | sort | head -n 1 || true)
+          fi
+          if [ -z "$SOURCE_ZIP" ]; then
+            echo 'ERROR: No source ZIP found in the repository root.'
+            echo 'Upload simulator-main.zip (or source.zip) to the root of the repository.'
+            exit 1
+          fi
+          echo "Using source archive: $SOURCE_ZIP"
+          mkdir -p "$RUNNER_TEMP/source-unpacked"
+          unzip -q "$SOURCE_ZIP" -d "$RUNNER_TEMP/source-unpacked"
+          PACKAGE_FILE=$(find "$RUNNER_TEMP/source-unpacked" -type f -name package.json -not -path '*/node_modules/*' -print | while read -r f; do d=$(dirname "$f"); if [ -f "$d/angular.json" ]; then echo "$f"; break; fi; done)
           if [ -z "$PACKAGE_FILE" ]; then
-            echo "ERROR: package.json not found. Upload the extracted project files, not the ZIP archive."
+            echo 'ERROR: ZIP extracted, but no folder containing both package.json and angular.json was found.'
             exit 1
           fi
           PROJECT_DIR=$(dirname "$PACKAGE_FILE")
-          if [ ! -f "$PROJECT_DIR/angular.json" ]; then
-            echo "ERROR: angular.json not found beside $PACKAGE_FILE. The complete project was not uploaded."
-            exit 1
-          fi
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Using project folder: $PROJECT_DIR"
+          echo "Project extracted to: $PROJECT_DIR"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -42,40 +55,52 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 21
-          cache: gradle
+          java-version: '21'
 
-      - name: Install npm dependencies
+      - name: Install project dependencies
         working-directory: ${{ env.PROJECT_DIR }}
-        run: npm install
+        run: npm install --no-audit --no-fund
 
-      - name: Install Capacitor Android platform package
+      - name: Add Capacitor Android dependency
         working-directory: ${{ env.PROJECT_DIR }}
-        run: npm install @capacitor/android@^7.4.4 --save
+        run: npm install @capacitor/android@7.4.4 --save-exact --no-audit --no-fund
 
-      - name: Build web app
+      - name: Build web application
         working-directory: ${{ env.PROJECT_DIR }}
         run: npm run build -- --configuration production
 
-      - name: Add Android platform
+      - name: Create Android project
         working-directory: ${{ env.PROJECT_DIR }}
-        run: npx cap add android
+        run: |
+          if [ ! -d android ]; then
+            npx cap add android
+          fi
+          npx cap sync android
 
-      - name: Sync Capacitor
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: npx cap sync android
-
-      - name: Build debug APK
+      - name: Build APK
         working-directory: ${{ env.PROJECT_DIR }}/android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew --no-daemon assembleDebug
 
-      - name: Upload APK
+      - name: Package APK into ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="${PROJECT_DIR}/android/app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK"
+          mkdir -p release
+          cp "$APK" release/PC-Simulator-debug.apk
+          (cd release && zip -q ../PC-Simulator-Android.zip PC-Simulator-debug.apk)
+          echo "APK and ZIP package created."
+
+      - name: Upload APK and ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: pc-simulator-debug-apk
-          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
+          name: PC-Simulator-Android
+          path: |
+            release/PC-Simulator-debug.apk
+            PC-Simulator-Android.zip
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
           
