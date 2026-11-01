@@ -27,21 +27,14 @@ jobs:
             if [ -f "$candidate" ]; then SOURCE_ZIP="$candidate"; break; fi
           done
           if [ -z "$SOURCE_ZIP" ]; then
-            SOURCE_ZIP=$(find . -maxdepth 1 -type f -iname '*.zip' ! -name 'android-apk.zip' -print | sort | head -n 1 || true)
+            SOURCE_ZIP=$(find . -maxdepth 1 -type f -iname '*.zip' ! -name 'PC-Simulator-Android.zip' -print | sort | head -n 1 || true)
           fi
-          if [ -z "$SOURCE_ZIP" ]; then
-            echo 'ERROR: No source ZIP found in the repository root.'
-            echo 'Upload simulator-main.zip (or source.zip) to the root of the repository.'
-            exit 1
-          fi
+          if [ -z "$SOURCE_ZIP" ]; then echo 'ERROR: No source ZIP found.'; exit 1; fi
           echo "Using source archive: $SOURCE_ZIP"
           mkdir -p "$RUNNER_TEMP/source-unpacked"
           unzip -q "$SOURCE_ZIP" -d "$RUNNER_TEMP/source-unpacked"
           PACKAGE_FILE=$(find "$RUNNER_TEMP/source-unpacked" -type f -name package.json -not -path '*/node_modules/*' -print | while read -r f; do d=$(dirname "$f"); if [ -f "$d/angular.json" ]; then echo "$f"; break; fi; done)
-          if [ -z "$PACKAGE_FILE" ]; then
-            echo 'ERROR: ZIP extracted, but no folder containing both package.json and angular.json was found.'
-            exit 1
-          fi
+          if [ -z "$PACKAGE_FILE" ]; then echo 'ERROR: ZIP must contain package.json and angular.json.'; exit 1; fi
           PROJECT_DIR=$(dirname "$PACKAGE_FILE")
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "Project extracted to: $PROJECT_DIR"
@@ -72,9 +65,7 @@ jobs:
       - name: Create Android project
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          if [ ! -d android ]; then
-            npx cap add android
-          fi
+          if [ ! -d android ]; then npx cap add android; fi
           npx cap sync android
 
       - name: Build APK
@@ -92,7 +83,6 @@ jobs:
           mkdir -p release
           cp "$APK" release/PC-Simulator-debug.apk
           (cd release && zip -q ../PC-Simulator-Android.zip PC-Simulator-debug.apk)
-          echo "APK and ZIP package created."
 
       - name: Upload APK and ZIP
         uses: actions/upload-artifact@v4
