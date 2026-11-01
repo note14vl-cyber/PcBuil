@@ -18,14 +18,16 @@ jobs:
       - name: Locate project folder
         shell: bash
         run: |
-          LOCK_FILE=$(find . -type f -name package-lock.json -not -path '*/node_modules/*' -print -quit)
-          if [ -z "$LOCK_FILE" ]; then
-            echo "ERROR: package-lock.json was not found. Upload the complete project, including package.json and package-lock.json."
+          PACKAGE_FILE=$(find . -type f -name package.json \
+            -not -path '*/node_modules/*' \
+            -not -path '*/.git/*' -print -quit)
+          if [ -z "$PACKAGE_FILE" ]; then
+            echo "ERROR: package.json not found. Upload the extracted project files, not the ZIP archive."
             exit 1
           fi
-          PROJECT_DIR=$(dirname "$LOCK_FILE")
-          if [ ! -f "$PROJECT_DIR/package.json" ]; then
-            echo "ERROR: package.json is missing beside $LOCK_FILE"
+          PROJECT_DIR=$(dirname "$PACKAGE_FILE")
+          if [ ! -f "$PROJECT_DIR/angular.json" ]; then
+            echo "ERROR: angular.json not found beside $PACKAGE_FILE. The complete project was not uploaded."
             exit 1
           fi
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
@@ -35,20 +37,25 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: '**/package-lock.json'
 
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 21
+          cache: gradle
 
-      - name: Install dependencies
-        run: npm ci --prefix "$PROJECT_DIR"
+      - name: Install npm dependencies
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: npm install
+
+      - name: Install Capacitor Android platform package
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: npm install @capacitor/android@^7.4.4 --save
 
       - name: Build web app
-        run: npm run build --prefix "$PROJECT_DIR"
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: npm run build -- --configuration production
 
       - name: Add Android platform
         working-directory: ${{ env.PROJECT_DIR }}
