@@ -25,9 +25,8 @@ jobs:
           set -euo pipefail
           TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.4.1.stable"
           mkdir -p "$TEMPLATE_DIR" "$HOME/.config/godot" "$HOME/.android"
-          if [ -d /root/.local/share/godot/export_templates/4.4.1.stable ]; then
-            cp -a /root/.local/share/godot/export_templates/4.4.1.stable/. "$TEMPLATE_DIR/"
-          fi
+          # The container runs as root, so HOME already points at /root.
+          # Do not copy the template directory onto itself.
           if [ ! -f "$TEMPLATE_DIR/android_debug.apk" ] || [ ! -f "$TEMPLATE_DIR/android_release.apk" ]; then
             echo "ERROR: Godot 4.4.1 Android export templates are missing."
             ls -la "$TEMPLATE_DIR" || true
@@ -105,3 +104,4 @@ jobs:
           path: build/PCWorkshop3D.apk
           if-no-files-found: error
           retention-days: 14
+          
