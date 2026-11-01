@@ -31,9 +31,9 @@ jobs:
 
           echo "Downloading official Godot 4.4.1 export templates..."
 
-          curl -fL --retry 3 \
-            "https://github.com/godotengine/godot/releases/download/4.4.1-stable/Godot_v4.4.1-stable_export_templates.tpz" \
-            -o "$TMP_DIR/export_templates.tpz"
+          wget -q --show-progress --tries=3 \
+  "https://github.com/godotengine/godot/releases/download/4.4.1-stable/Godot_v4.4.1-stable_export_templates.tpz" \
+  -O "$TMP_DIR/export_templates.tpz"
 
           unzip -q "$TMP_DIR/export_templates.tpz" -d "$TMP_DIR/unpacked"
 
