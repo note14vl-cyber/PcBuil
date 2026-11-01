@@ -1,96 +1,108 @@
-name: Build Android APK from ZIP
+name: Build PC Workshop 3D APK
 
 on:
   workflow_dispatch:
   push:
-    branches: [main, master]
-    paths:
-      - '*.zip'
-      - '.github/workflows/android-apk.yml'
-
-permissions:
-  contents: read
+    branches: [ main, master ]
 
 jobs:
   build:
+    name: Export Android APK
     runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.4.1
+    env:
+      ANDROID_HOME: /usr/lib/android-sdk
+      ANDROID_SDK_ROOT: /usr/lib/android-sdk
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Find and extract source ZIP
+      - name: Prepare Godot Android environment
         shell: bash
         run: |
           set -euo pipefail
-          SOURCE_ZIP=""
-          for candidate in simulator-main.zip source.zip; do
-            if [ -f "$candidate" ]; then SOURCE_ZIP="$candidate"; break; fi
-          done
-          if [ -z "$SOURCE_ZIP" ]; then
-            SOURCE_ZIP=$(find . -maxdepth 1 -type f -iname '*.zip' ! -name 'PC-Simulator-Android.zip' -print | sort | head -n 1 || true)
+          TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.4.1.stable"
+          mkdir -p "$TEMPLATE_DIR" "$HOME/.config/godot" "$HOME/.android"
+          if [ -d /root/.local/share/godot/export_templates/4.4.1.stable ]; then
+            cp -a /root/.local/share/godot/export_templates/4.4.1.stable/. "$TEMPLATE_DIR/"
           fi
-          if [ -z "$SOURCE_ZIP" ]; then echo 'ERROR: No source ZIP found.'; exit 1; fi
-          echo "Using source archive: $SOURCE_ZIP"
-          mkdir -p "$RUNNER_TEMP/source-unpacked"
-          unzip -q "$SOURCE_ZIP" -d "$RUNNER_TEMP/source-unpacked"
-          PACKAGE_FILE=$(find "$RUNNER_TEMP/source-unpacked" -type f -name package.json -not -path '*/node_modules/*' -print | while read -r f; do d=$(dirname "$f"); if [ -f "$d/angular.json" ]; then echo "$f"; break; fi; done)
-          if [ -z "$PACKAGE_FILE" ]; then echo 'ERROR: ZIP must contain package.json and angular.json.'; exit 1; fi
-          PROJECT_DIR=$(dirname "$PACKAGE_FILE")
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project extracted to: $PROJECT_DIR"
+          if [ ! -f "$TEMPLATE_DIR/android_debug.apk" ] || [ ! -f "$TEMPLATE_DIR/android_release.apk" ]; then
+            echo "ERROR: Godot 4.4.1 Android export templates are missing."
+            ls -la "$TEMPLATE_DIR" || true
+            exit 1
+          fi
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -keystore "$HOME/.android/debug.keystore" \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          cat > "$HOME/.config/godot/editor_settings-4.4.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+          [resource]
+          export/android/java_sdk_path = "$JAVA_HOME"
+          export/android/android_sdk_path = "$ANDROID_HOME"
+          export/android/debug_keystore = "$HOME/.android/debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          export/android/force_system_user = false
+          export/android/timestamping_authority_url = ""
+          export/android/shutdown_adb_on_exit = true
+          EOF
+          godot --version
+          java -version
+          test -x "$ANDROID_HOME/platform-tools/adb"
+          ls -lh "$TEMPLATE_DIR/android_debug.apk" "$TEMPLATE_DIR/android_release.apk"
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - name: Install project dependencies
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: npm install --no-audit --no-fund
-
-      - name: Add Capacitor Android dependency
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: npm install @capacitor/android@7.4.4 --save-exact --no-audit --no-fund
-
-      - name: Build web application
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: npm run build -- --configuration production
-
-      - name: Create Android project
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          if [ ! -d android ]; then npx cap add android; fi
-          npx cap sync android
-
-      - name: Build APK
-        working-directory: ${{ env.PROJECT_DIR }}/android
-        run: |
-          chmod +x gradlew
-          ./gradlew --no-daemon assembleDebug
-
-      - name: Package APK into ZIP
+      - name: Install Android SDK packages
         shell: bash
         run: |
           set -euo pipefail
-          APK="${PROJECT_DIR}/android/app/build/outputs/apk/debug/app-debug.apk"
-          test -f "$APK"
-          mkdir -p release
-          cp "$APK" release/PC-Simulator-debug.apk
-          (cd release && zip -q ../PC-Simulator-Android.zip PC-Simulator-debug.apk)
+          SDKMANAGER="$(find "$ANDROID_HOME" -type f -name sdkmanager -print -quit)"
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager not found in $ANDROID_HOME"
+            exit 1
+          fi
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses || true
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
+            "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      - name: Upload APK and ZIP
+      - name: Check project files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f project.godot
+          test -f main.tscn
+          test -f main.gd
+          test -f export_presets.cfg
+          grep -q 'name="Android"' export_presets.cfg
+          echo "Project files and Android export preset found."
+
+      - name: Import and validate Godot project
+        shell: bash
+        run: |
+          set -euo pipefail
+          godot --headless --editor --path "$GITHUB_WORKSPACE" --import
+          godot --headless --editor --path "$GITHUB_WORKSPACE" --quit
+          godot --headless --path "$GITHUB_WORKSPACE" --quit-after 3
+
+      - name: Export APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          godot --headless --path "$GITHUB_WORKSPACE" \
+            --export-debug "Android" "$GITHUB_WORKSPACE/build/PCWorkshop3D.apk" --verbose
+          test -s build/PCWorkshop3D.apk
+          ls -lh build/PCWorkshop3D.apk
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: PC-Simulator-Android
-          path: |
-            release/PC-Simulator-debug.apk
-            PC-Simulator-Android.zip
+          name: PCWorkshop3D-Android-APK
+          path: build/PCWorkshop3D.apk
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 14
           
