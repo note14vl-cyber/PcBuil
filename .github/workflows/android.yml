@@ -1,3 +1,4 @@
+
 name: Build PC Workshop 3D APK
 
 on:
@@ -15,29 +16,56 @@ jobs:
       ANDROID_HOME: /usr/lib/android-sdk
       ANDROID_SDK_ROOT: /usr/lib/android-sdk
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare Godot Android environment
+      - name: Install Godot Android export templates
         shell: bash
         run: |
           set -euo pipefail
           TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.4.1.stable"
-          mkdir -p "$TEMPLATE_DIR" "$HOME/.config/godot" "$HOME/.android"
-          # The container runs as root, so HOME already points at /root.
-          # Do not copy the template directory onto itself.
-          if [ ! -f "$TEMPLATE_DIR/android_debug.apk" ] || [ ! -f "$TEMPLATE_DIR/android_release.apk" ]; then
-            echo "ERROR: Godot 4.4.1 Android export templates are missing."
-            ls -la "$TEMPLATE_DIR" || true
+          TMP_DIR="$(mktemp -d)"
+          mkdir -p "$TEMPLATE_DIR"
+
+          echo "Downloading official Godot 4.4.1 export templates..."
+
+          curl -fL --retry 3 \
+            "https://github.com/godotengine/godot/releases/download/4.4.1-stable/Godot_v4.4.1-stable_export_templates.tpz" \
+            -o "$TMP_DIR/export_templates.tpz"
+
+          unzip -q "$TMP_DIR/export_templates.tpz" -d "$TMP_DIR/unpacked"
+
+          if [ -d "$TMP_DIR/unpacked/templates" ]; then
+            cp -a "$TMP_DIR/unpacked/templates/." "$TEMPLATE_DIR/"
+          else
+            echo "Unexpected export template archive layout:"
+            find "$TMP_DIR/unpacked" -maxdepth 3 -type f | head -50
             exit 1
           fi
+
+          test -s "$TEMPLATE_DIR/android_debug.apk"
+          test -s "$TEMPLATE_DIR/android_release.apk"
+
+          echo "Android export templates installed:"
+          ls -lh "$TEMPLATE_DIR/android_debug.apk" "$TEMPLATE_DIR/android_release.apk"
+
+          rm -rf "$TMP_DIR"
+
+      - name: Prepare Android export settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.config/godot" "$HOME/.android"
+
           if [ ! -f "$HOME/.android/debug.keystore" ]; then
             keytool -genkeypair -keystore "$HOME/.android/debug.keystore" \
               -storepass android -alias androiddebugkey -keypass android \
               -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
           fi
+
           cat > "$HOME/.config/godot/editor_settings-4.4.tres" <<EOF
           [gd_resource type="EditorSettings" format=3]
           [resource]
@@ -50,39 +78,53 @@ jobs:
           export/android/timestamping_authority_url = ""
           export/android/shutdown_adb_on_exit = true
           EOF
+
           godot --version
           java -version
-          test -x "$ANDROID_HOME/platform-tools/adb"
-          ls -lh "$TEMPLATE_DIR/android_debug.apk" "$TEMPLATE_DIR/android_release.apk"
+          test -d "$ANDROID_HOME"
+          test -x "$JAVA_HOME/bin/java"
 
       - name: Install Android SDK packages
         shell: bash
         run: |
           set -euo pipefail
+
           SDKMANAGER="$(find "$ANDROID_HOME" -type f -name sdkmanager -print -quit)"
+
           if [ -z "$SDKMANAGER" ]; then
             echo "ERROR: sdkmanager not found in $ANDROID_HOME"
+            find / -type f -name sdkmanager -print 2>/dev/null | head -20 || true
             exit 1
           fi
+
           yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses || true
+
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
-            "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0"
+
+          test -x "$ANDROID_HOME/platform-tools/adb"
 
       - name: Check project files
         shell: bash
         run: |
           set -euo pipefail
+
           test -f project.godot
           test -f main.tscn
           test -f main.gd
           test -f export_presets.cfg
+
           grep -q 'name="Android"' export_presets.cfg
+
           echo "Project files and Android export preset found."
 
       - name: Import and validate Godot project
         shell: bash
         run: |
           set -euo pipefail
+
           godot --headless --editor --path "$GITHUB_WORKSPACE" --import
           godot --headless --editor --path "$GITHUB_WORKSPACE" --quit
           godot --headless --path "$GITHUB_WORKSPACE" --quit-after 3
@@ -91,10 +133,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           mkdir -p build
+
           godot --headless --path "$GITHUB_WORKSPACE" \
-            --export-debug "Android" "$GITHUB_WORKSPACE/build/PCWorkshop3D.apk" --verbose
+            --export-debug "Android" \
+            "$GITHUB_WORKSPACE/build/PCWorkshop3D.apk" --verbose
+
           test -s build/PCWorkshop3D.apk
+
           ls -lh build/PCWorkshop3D.apk
 
       - name: Upload APK
