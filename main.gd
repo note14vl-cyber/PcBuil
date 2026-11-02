@@ -51,7 +51,6 @@ func _ready() -> void:
 	_build_ui()
 	_update_ui()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN)
 
 func _build_world() -> void:
 	var world_env := WorldEnvironment.new()
